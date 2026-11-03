@@ -4,6 +4,9 @@ const nextConfig = {
   outputFileTracingIncludes: {
     "/api/**/*": ["./prompts/**/*"],
   },
+  experimental: {
+    agentUpgrade: "security",
+  },
 };
 
 export default nextConfig;
