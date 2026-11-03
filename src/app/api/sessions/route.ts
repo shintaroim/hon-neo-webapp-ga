@@ -20,7 +20,10 @@ export async function POST() {
   } catch (error) {
     console.error("Session creation error:", error);
     return NextResponse.json(
-      { error: "セッションの作成に失敗しました。" },
+      {
+        error: "セッションの作成に失敗しました。",
+        details: error instanceof Error ? error.message : String(error),
+      },
       { status: 500 }
     );
   }

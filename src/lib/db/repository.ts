@@ -69,7 +69,9 @@ export class JsonFileRepository implements SessionRepository {
   private isPersisted: boolean;
 
   constructor(customFilePath?: string) {
-    const dataDir = path.resolve(process.cwd(), "data");
+    const dataDir = process.env.VERCEL
+      ? path.join("/tmp", "honneo-data")
+      : path.resolve(process.cwd(), "data");
     this.filePath = customFilePath || path.join(dataDir, "honneo-db.json");
     this.isPersisted = !customFilePath?.includes(":memory:");
 
