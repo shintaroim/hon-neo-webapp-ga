@@ -294,8 +294,189 @@ export class JsonFileRepository implements SessionRepository {
   }
 }
 
+export class ResilientRepository implements SessionRepository {
+  private primary: SessionRepository;
+  private fallback: SessionRepository;
+  private primaryFailed = false;
+
+  constructor(primary: SessionRepository, fallback: SessionRepository) {
+    this.primary = primary;
+    this.fallback = fallback;
+  }
+
+  private isNetworkOrTableError(err: unknown): boolean {
+    const msg = String(err);
+    return (
+      msg.includes("fetch failed") ||
+      msg.includes("ENOTFOUND") ||
+      msg.includes("ECONNREFUSED") ||
+      msg.includes("relation") || // table doesn't exist
+      msg.includes("Failed to create session in Supabase")
+    );
+  }
+
+  public async createSession(
+    params?: CreateSessionParams
+  ): Promise<{ session: SessionRecord; resumeToken: string }> {
+    if (!this.primaryFailed) {
+      try {
+        return await this.primary.createSession(params);
+      } catch (err) {
+        console.warn("[DB] Primary repository failed createSession, falling back to JsonFileRepository:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.createSession(params);
+  }
+
+  public async getSessionById(sessionId: string): Promise<SessionRecord | null> {
+    if (!this.primaryFailed) {
+      try {
+        const res = await this.primary.getSessionById(sessionId);
+        if (res) return res;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed getSessionById:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.getSessionById(sessionId);
+  }
+
+  public async verifySessionToken(sessionId: string, rawToken: string): Promise<boolean> {
+    if (!this.primaryFailed) {
+      try {
+        const valid = await this.primary.verifySessionToken(sessionId, rawToken);
+        if (valid) return true;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed verifySessionToken:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.verifySessionToken(sessionId, rawToken);
+  }
+
+  public async updateSession(
+    sessionId: string,
+    updates: Partial<Pick<SessionRecord, "phase" | "stateJson" | "promptVersion">>
+  ): Promise<SessionRecord | null> {
+    if (!this.primaryFailed) {
+      try {
+        const res = await this.primary.updateSession(sessionId, updates);
+        if (res) return res;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed updateSession:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.updateSession(sessionId, updates);
+  }
+
+  public async softDeleteSession(sessionId: string, rawToken: string): Promise<boolean> {
+    if (!this.primaryFailed) {
+      try {
+        const res = await this.primary.softDeleteSession(sessionId, rawToken);
+        if (res) return true;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed softDeleteSession:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.softDeleteSession(sessionId, rawToken);
+  }
+
+  public async createMessage(params: CreateMessageParams): Promise<MessageRecord | null> {
+    if (!this.primaryFailed) {
+      try {
+        const res = await this.primary.createMessage(params);
+        if (res) return res;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed createMessage:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.createMessage(params);
+  }
+
+  public async getMessagesBySessionId(sessionId: string): Promise<MessageRecord[]> {
+    if (!this.primaryFailed) {
+      try {
+        const res = await this.primary.getMessagesBySessionId(sessionId);
+        if (res && res.length > 0) return res;
+      } catch (err) {
+        console.warn("[DB] Primary repository failed getMessagesBySessionId:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.getMessagesBySessionId(sessionId);
+  }
+
+  public async getTurnCount(sessionId: string): Promise<number> {
+    if (!this.primaryFailed) {
+      try {
+        return await this.primary.getTurnCount(sessionId);
+      } catch (err) {
+        console.warn("[DB] Primary repository failed getTurnCount:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.getTurnCount(sessionId);
+  }
+
+  public async createUsageEvent(params: CreateUsageEventParams): Promise<UsageEventRecord> {
+    if (!this.primaryFailed) {
+      try {
+        return await this.primary.createUsageEvent(params);
+      } catch (err) {
+        console.warn("[DB] Primary repository failed createUsageEvent:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.createUsageEvent(params);
+  }
+
+  public async getUsageEventsBySessionId(sessionId: string): Promise<UsageEventRecord[]> {
+    if (!this.primaryFailed) {
+      try {
+        return await this.primary.getUsageEventsBySessionId(sessionId);
+      } catch (err) {
+        console.warn("[DB] Primary repository failed getUsageEventsBySessionId:", err);
+        if (this.isNetworkOrTableError(err)) {
+          this.primaryFailed = true;
+        }
+      }
+    }
+    return this.fallback.getUsageEventsBySessionId(sessionId);
+  }
+}
+
 // デフォルトのリポジトリシングルトンインスタンス
 let defaultRepo: SessionRepository | null = null;
+
+function isValidSupabaseConfig(url?: string, key?: string): boolean {
+  if (!url || !key) return false;
+  if (url.includes("your-project") || url.includes("example.com")) return false;
+  if (!url.startsWith("https://") && !url.startsWith("http://")) return false;
+  if (key.includes("your-supabase") || key.includes("mock-key") || key.length < 15) return false;
+  return true;
+}
 
 export function getRepository(): SessionRepository {
   if (defaultRepo) {
@@ -313,14 +494,16 @@ export function getRepository(): SessionRepository {
     process.env.SUPABASE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_KEY;
 
-  if (supabaseUrl && supabaseKey) {
-    console.log("[DB] Using SupabaseRepository. Target URL:", supabaseUrl.slice(0, 15) + "...");
-    defaultRepo = new SupabaseRepository(supabaseUrl, supabaseKey);
+  if (isValidSupabaseConfig(supabaseUrl, supabaseKey)) {
+    console.log("[DB] Using ResilientRepository (Supabase with JsonFile fallback). Target URL:", supabaseUrl!.slice(0, 15) + "...");
+    const primary = new SupabaseRepository(supabaseUrl!, supabaseKey!);
+    const fallback = new JsonFileRepository();
+    defaultRepo = new ResilientRepository(primary, fallback);
     return defaultRepo;
   }
 
   console.warn(
-    "[DB] WARNING: Supabase is not configured (SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing). Falling back to JsonFileRepository (Ephemeral in serverless!)."
+    "[DB] WARNING: Supabase is not configured or uses placeholder credentials. Falling back to JsonFileRepository."
   );
   defaultRepo = new JsonFileRepository();
   return defaultRepo;
